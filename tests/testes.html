@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Homologação — Jogo da Velha (CT01–CT10)</title>
+  <style>
+    body { font: 15px/1.5 system-ui, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f6f3ee; color: #1c1b1a; }
+    h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    p { margin: 0 0 16px; color: #58524a; }
+    .summary { font-weight: 700; padding: 10px 14px; border-radius: 10px; background: #fff; border: 1px solid #d6cfc4; display: inline-block; margin-bottom: 16px; }
+    .summary.ok { background: #e8f6ed; color: #14532d; border-color: #15803d; }
+    .summary.fail { background: #fdeceb; color: #8c1d18; border-color: #b42318; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e6e0d6; vertical-align: top; }
+    th { background: #efebe4; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; }
+    td.st { font-weight: 700; white-space: nowrap; }
+    td.pass { color: #14532d; } td.fail { color: #8c1d18; }
+    td small { color: #58524a; }
+    iframe { border: 1px solid #d6cfc4; background: #fff; height: 900px; margin-top: 20px; display: block; max-width: none; }
+    .frame-wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Homologação automatizada — Casos de Teste</h1>
+  <p>Executa os roteiros CT01–CT10 (e verificações extras de RF/RN/RNF) na interface real, carregada no quadro abaixo. Abra esta página por um servidor local (<code>node tests/run-browser-tests.js --serve</code>).</p>
+  <div class="summary" id="summary" role="status" aria-live="polite">Executando…</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>ID</th><th>Cenário</th><th>Status</th><th>Detalhes</th></tr></thead>
+      <tbody id="results"></tbody>
+    </table>
+  </div>
+  <div class="frame-wrap"><iframe id="app" title="Aplicação em teste" width="1000"></iframe></div>
+
+<script>
+(() => {
+  'use strict';
+  const frame = document.getElementById('app');
+  const out = document.getElementById('results');
+  const results = [];
+  let w, d;
+
+  if (location.protocol === 'file:') {
+    document.getElementById('summary').textContent =
+      'Esta página precisa de um servidor local. No terminal, na pasta do projeto, rode: node tests/run-browser-tests.js --serve';
+    document.getElementById('summary').className = 'summary fail';
+    return;
+  }
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const frameTick = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  function assert(cond, msg) { if (!cond) throw new Error(msg); }
+
+  async function loadApp({ width = 1000, clearPrefs = true } = {}) {
+    if (clearPrefs) { try { localStorage.clear(); } catch (_) {} }
+    frame.width = width;
+    frame.style.width = width + 'px';
+    await new Promise(res => { frame.onload = res; frame.src = '../index.html?t=' + Date.now(); });
+    w = frame.contentWindow; d = w.document;
+    await frameTick();
+    assert(w.app, 'aplicação não inicializou (window.app ausente)');
+    w.app.aiDelay = 0;
+  }
+
+  function start(cfg = {}) {
+    const f = d.getElementById('setup-form');
+    const c = { style: 'papel', mode: 'pvp', difficulty: 'medio', humanMark: 'X', ...cfg };
+    for (const [k, v] of Object.entries(c)) {
+      const input = f.querySelector(`input[name="${k}"][value="${v}"]`);
+      assert(input, `opção ${k}=${v} inexistente`);
+      input.checked = true;
+      input.dispatchEvent(new w.Event('change', { bubbles: true }));
+    }
+    d.getElementById('btn-start').click();
+  }
+
+  const cells = () => [...d.querySelectorAll('#board .cell')];
+  const click = i => cells()[i].click();
+  const marks = () => cells().map(c => c.dataset.mark || null);
+  const statusText = () => d.getElementById('status-text').textContent;
+  const score = () => ({
+    X: +d.getElementById('score-x').textContent,
+    O: +d.getElementById('score-o').textContent,
+    draws: +d.getElementById('score-draw').textContent
+  });
+  const winCells = () => cells().map((c, i) => c.classList.contains('is-win') ? i : -1).filter(i => i >= 0);
+  const isGreen = el => /rgb\(21, 128, 61\)/.test(w.getComputedStyle(el).boxShadow);
+
+  async function run(id, name, fn) {
+    const row = { id, name, ok: false, detail: '' };
+    try { row.detail = (await fn()) || 'OK'; row.ok = true; }
+    catch (e) { row.detail = e.message; }
+    results.push(row);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${id}</td><td>${name}</td><td class="st ${row.ok ? 'pass' : 'fail'}">${row.ok ? '✔ Passa' : '✖ Falha'}</td><td><small></small></td>`;
+    tr.querySelector('small').textContent = row.detail;
+    out.appendChild(tr);
+  }
+
+  async function suite() {
+    /* ---------------- Casos de Teste oficiais ---------------- */
+
+    await run('CT01', 'Vitória por linha', async () => {
+      await loadApp(); start();
+      [0, 3, 1, 4, 2].forEach(click);
+      assert(/Jogador X venceu/.test(statusText()), `status: "${statusText()}"`);
+      assert(winCells().join() === '0,1,2', `destaque em ${winCells()}`);
+      assert(winCells().every(i => isGreen(cells()[i])), 'destaque não está verde');
+      assert(score().X === 1, 'placar de X não incrementou');
+      return statusText();
+    });
+
+    await run('CT02', 'Vitória por coluna', async () => {
+      await loadApp(); start();
+      [0, 1, 2, 4, 5, 7].forEach(click);
+      assert(/Jogador O venceu/.test(statusText()), statusText());
+      assert(winCells().join() === '1,4,7', `destaque em ${winCells()}`);
+      assert(score().O === 1);
+      return statusText();
+    });
+
+    await run('CT03', 'Vitória por diagonal', async () => {
+      await loadApp(); start();
+      [0, 1, 4, 2, 8].forEach(click);
+      assert(/Jogador X venceu/.test(statusText()) && /diagonal principal/.test(statusText()), statusText());
+      assert(winCells().join() === '0,4,8');
+      return statusText();
+    });
+
+    await run('CT04', 'Empate ("Velha")', async () => {
+      await loadApp(); start();
+      [0, 2, 1, 3, 5, 4, 6, 7, 8].forEach(click);
+      assert(/^Partida empatada!/.test(statusText()), statusText());
+      assert(score().draws === 1, 'empates não incrementou');
+      return statusText();
+    });
+
+    await run('CT05', 'Casa já ocupada', async () => {
+      await loadApp(); start();
+      click(4); click(4);
+      assert(marks()[4] === 'X', 'marca foi sobrescrita');
+      assert(d.getElementById('status').dataset.tone === 'error', 'sem alerta visual de erro');
+      assert(cells()[4].classList.contains('is-invalid'), 'casa não sinalizada');
+      assert(/continua a vez do Jogador O/.test(statusText()), statusText());
+      assert(w.app.model.getState().currentPlayer === 'O', 'turno foi trocado');
+      assert(cells()[4].getAttribute('aria-disabled') === 'true', 'casa ocupada não anunciada como indisponível');
+      return statusText();
+    });
+
+    await run('CT06', 'Tentativa pós-fim', async () => {
+      await loadApp(); start();
+      [0, 3, 1, 4, 2].forEach(click);
+      const before = marks().join();
+      click(8); click(5);
+      assert(marks().join() === before, 'nova marca registrada após o fim');
+      assert(cells().every(c => c.getAttribute('aria-disabled') === 'true'), 'células não bloqueadas');
+      assert(score().X === 1, 'placar alterado');
+      return 'Tabuleiro bloqueado';
+    });
+
+    await run('CT07', 'Nova partida', async () => {
+      await loadApp(); start();
+      [0, 1, 2, 4, 5, 7].forEach(click); // O vence
+      d.getElementById('btn-new').click();
+      assert(marks().every(m => m === null), 'tabuleiro não foi limpo');
+      assert(statusText() === 'Vez do Jogador X', statusText());
+      assert(score().O === 1, 'placar não foi mantido');
+      click(0);
+      assert(marks()[0] === 'X', 'X não retomou o turno inicial');
+      return 'Tabuleiro limpo, X começa, placar mantido';
+    });
+
+    await run('CT08', 'Zerar placar (com confirmação)', async () => {
+      await loadApp(); start();
+      [0, 3, 1, 4, 2].forEach(click);
+      d.getElementById('btn-new').click();
+      click(0);
+      const dlg = d.getElementById('confirm-dialog');
+      // 1º: cancelar — nada muda (RN07)
+      d.getElementById('btn-reset').click(); await frameTick();
+      assert(dlg.open, 'diálogo de confirmação não abriu');
+      d.getElementById('confirm-cancel').click(); await sleep(20);
+      assert(!dlg.open && score().X === 1 && marks()[0] === 'X', 'cancelar alterou dados');
+      // 2º: confirmar
+      d.getElementById('btn-reset').click(); await frameTick();
+      d.getElementById('confirm-ok').click(); await sleep(20);
+      const s = score();
+      assert(s.X === 0 && s.O === 0 && s.draws === 0, 'placar não zerou');
+      assert(marks().every(m => m === null), 'rodada não foi reiniciada');
+      return 'Cancelar preserva; confirmar zera tudo';
+    });
+
+    await run('CT09', 'Navegação por teclado', async () => {
+      await loadApp(); start();
+      const cs = cells();
+      assert(cs.length === 9, 'tabuleiro não tem 9 casas');
+      assert(cs.every(c => c.tagName === 'BUTTON' && c.tabIndex === 0 && !c.disabled), 'casas não são <button> focáveis');
+      cs[0].focus();
+      cs[0].dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      assert(d.activeElement === cs[1], 'seta → não moveu o foco');
+      cs[1].dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      assert(d.activeElement === cs[4], 'seta ↓ não moveu o foco');
+      d.activeElement.dispatchEvent(new w.KeyboardEvent('keydown', { key: '5', bubbles: true, cancelable: true }));
+      assert(marks()[4] === 'X', 'atalho numérico não registrou jogada');
+      assert(cs[4].getAttribute('aria-label').startsWith('Casa 5, linha 2, coluna 2: X'), cs[4].getAttribute('aria-label'));
+      return 'Botões focáveis, setas, atalhos e aria-label (Tab/Enter reais: ver run-browser-tests.js)';
+    });
+
+    await run('CT10', 'Telas de 360px a 1440px', async () => {
+      const report = [];
+      for (const width of [360, 768, 1200, 1440]) {
+        await loadApp({ width });
+        const check = where => {
+          const el = d.documentElement;
+          assert(el.scrollWidth <= el.clientWidth, `${width}px (${where}): rolagem horizontal ${el.scrollWidth}>${el.clientWidth}`);
+        };
+        check('configuração');
+        start({ style: 'lousa' });
+        await frameTick();
+        check('partida');
+        const board = d.getElementById('board').getBoundingClientRect();
+        assert(Math.abs(board.width - board.height) < 2, 'tabuleiro não é quadrado');
+        assert(board.right <= d.documentElement.clientWidth, 'tabuleiro ultrapassa a tela');
+        report.push(`${width}px ✓`);
+      }
+      return report.join(' · ');
+    });
+
+    /* ---------------- Verificações extras ---------------- */
+
+    await run('RN01', 'X inicia todas as rodadas', async () => {
+      await loadApp(); start();
+      [0, 1, 2, 4, 5, 7].forEach(click); // O vence
+      d.getElementById('btn-new').click();
+      assert(w.app.model.getState().currentPlayer === 'X');
+      return 'OK';
+    });
+
+    await run('RNF05', 'Região role="status" e aria-live', async () => {
+      await loadApp(); start();
+      const st = d.getElementById('status');
+      assert(st.getAttribute('role') === 'status' && st.getAttribute('aria-live') === 'polite');
+      click(0);
+      assert(/Vez do Jogador O/.test(st.textContent), st.textContent);
+      return st.textContent.trim();
+    });
+
+    await run('ESTILOS', 'Os 6 estilos da imagem de referência', async () => {
+      const labels = [];
+      for (const style of ['croche', 'lousa', 'terminal', 'papel', 'marmore', 'aquarela']) {
+        await loadApp(); start({ style });
+        click(0); click(4);
+        assert(d.getElementById('stage').dataset.style === style, `estilo ${style} não aplicado`);
+        const m = cells()[0].querySelector('.mark');
+        assert(m, `marca não renderizada em ${style}`);
+        labels.push(w.STYLES[style].label);
+      }
+      return labels.join(', ');
+    });
+
+    await run('DIFIC', 'Contra o computador (4 níveis)', async () => {
+      for (const difficulty of ['facil', 'medio', 'dificil', 'impossivel']) {
+        await loadApp(); start({ mode: 'cpu', difficulty });
+        click(4);
+        await sleep(30);
+        const m = marks();
+        assert(m[4] === 'X' && m.filter(v => v === 'O').length === 1, `${difficulty}: computador não respondeu`);
+        assert(/Sua vez/.test(statusText()), statusText());
+      }
+      return 'Computador responde em todos os níveis';
+    });
+
+    await run('IMPOSS', 'Nível impossível bloqueia vitória', async () => {
+      await loadApp(); start({ mode: 'cpu', difficulty: 'impossivel' });
+      click(0); await sleep(30);
+      const free = marks().map((v, i) => v ? -1 : i).filter(i => i >= 0);
+      click(free.includes(1) ? 1 : 3); await sleep(30);
+      assert(!w.app.model.getState().winner, 'humano não deveria vencer em 2 jogadas');
+      return `Tabuleiro: ${marks().map(v => v || '·').join('')}`;
+    });
+
+    await run('CPU-O', 'Humano como O: computador (X) começa', async () => {
+      await loadApp(); start({ mode: 'cpu', difficulty: 'facil', humanMark: 'O' });
+      await sleep(30);
+      assert(marks().filter(v => v === 'X').length === 1, 'computador não abriu a partida');
+      assert(d.getElementById('score-x-who').textContent === 'Computador');
+      return 'OK';
+    });
+
+    await run('UNDO', 'Desfazer jogada (controle do usuário)', async () => {
+      await loadApp(); start({ mode: 'cpu', difficulty: 'medio' });
+      const undoBtn = d.getElementById('btn-undo');
+      assert(undoBtn.disabled, 'desfazer deveria iniciar desabilitado');
+      click(4); await sleep(30);
+      undoBtn.click();
+      assert(marks().every(v => v === null), 'não desfez jogada do humano + resposta do computador');
+      return 'OK';
+    });
+
+    await run('PREFS', 'Preferências lembradas', async () => {
+      await loadApp(); start({ style: 'terminal', mode: 'cpu', difficulty: 'dificil' });
+      await loadApp({ clearPrefs: false });
+      const v = w.app.view.getSetupValues();
+      assert(v.style === 'terminal' && v.mode === 'cpu' && v.difficulty === 'dificil', JSON.stringify(v));
+      return JSON.stringify(v);
+    });
+
+    await run('CONFIG', 'Sair no meio da partida pede confirmação', async () => {
+      await loadApp(); start();
+      click(0);
+      d.getElementById('btn-settings').click(); await frameTick();
+      assert(d.getElementById('confirm-dialog').open, 'sem confirmação');
+      d.getElementById('confirm-cancel').click(); await sleep(20);
+      assert(!d.getElementById('screen-game').hidden && marks()[0] === 'X', 'partida perdida ao cancelar');
+      return 'OK';
+    });
+
+    await run('AJUDA', 'Ajuda acessível pelo botão e tecla ?', async () => {
+      await loadApp(); start();
+      d.body.dispatchEvent(new w.KeyboardEvent('keydown', { key: '?', bubbles: true, cancelable: true }));
+      assert(d.getElementById('help-dialog').open, 'ajuda não abriu');
+      return 'OK';
+    });
+
+    await run('RNF03', 'Latência de clique < 50 ms', async () => {
+      await loadApp(); start();
+      const t0 = performance.now();
+      click(4);
+      const dt = performance.now() - t0;
+      assert(dt < 50, `${dt.toFixed(1)} ms`);
+      return `${dt.toFixed(2)} ms`;
+    });
+
+    await run('RNF07', 'Sem dependências remotas no código', async () => {
+      // Analisa o código-fonte (e não o tráfego do navegador, que pode conter
+      // scripts injetados por extensões ou antivírus alheios à aplicação).
+      const files = ['../index.html', '../css/styles.css', '../js/model.js', '../js/view.js', '../js/controller.js'];
+      const remote = /(src|href)\s*=\s*["']?(https?:)?\/\/|url\(\s*["']?(https?:)?\/\/|@import|fetch\(|XMLHttpRequest|WebSocket|import\s*\(/i;
+      for (const f of files) {
+        const txt = await (await fetch(f, { cache: 'no-store' })).text();
+        const hit = txt.split('\n').find(l => remote.test(l));
+        assert(!hit, `${f}: ${hit && hit.trim()}`);
+      }
+      return `${files.length} arquivos analisados — nenhum recurso remoto`;
+    });
+  }
+
+  suite().then(() => {
+    const failed = results.filter(r => !r.ok);
+    const sum = document.getElementById('summary');
+    sum.textContent = failed.length
+      ? `${failed.length} de ${results.length} verificações falharam`
+      : `Todas as ${results.length} verificações passaram`;
+    sum.className = 'summary ' + (failed.length ? 'fail' : 'ok');
+    window.__RESULTS__ = results;
+    window.__DONE__ = true;
+    document.body.dataset.done = 'true';
+  });
+})();
+</script>
+</body>
+</html>
