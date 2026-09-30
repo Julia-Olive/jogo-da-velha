@@ -1,6 +1,4 @@
-# Jogo da Velha: Requisitos e Solução MVC
-
-Jogo da velha para navegador, organizado na arquitetura MVC, com seis estilos visuais, modo contra o computador em quatro níveis de dificuldade e recursos de acessibilidade (WCAG 2.1 AA).
+# Jogo da Velha
 
 ## Como jogar
 
