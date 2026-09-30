@@ -1,5 +1,5 @@
 /* =========================================================
-   Jogo da Velha — folha de estilos
+   Jogo da Velha: folha de estilos
    Interface neutra (WCAG AA) + 6 estilos de tabuleiro
    (Crochê, Lousa, Terminal, Papel, Mármore, Aquarela)
    ========================================================= */
@@ -23,7 +23,7 @@
   --mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
   --space: clamp(12px, 3vw, 24px);
 
-  /* Cores de X e O na interface (placar/status) — padrão, sobrescritas por estilo */
+  /* Cores de X e O na interface (placar/status): padrão, sobrescritas por estilo */
   --x-ui: #1d3fa5;
   --o-ui: #b3261e;
 }
@@ -338,7 +338,7 @@ kbd {
   font-size: .875rem; font-weight: 600; color: var(--muted);
 }
 
-/* Placar — RF07 */
+/* Placar: RF07 */
 .scoreboard {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -364,7 +364,7 @@ kbd {
 .score--o .score__value { color: var(--o-ui); }
 .score.is-bump { animation: bump .5s ease; }
 
-/* Status — role="status" */
+/* Status: role="status" */
 .status {
   --tone-bg: var(--surface);
   --tone-fg: var(--text);
@@ -421,7 +421,7 @@ kbd {
 @media (hover: none) { .shortcuts { display: none; } }
 
 /* =========================================================
-   TABULEIRO — estrutura comum
+   TABULEIRO: estrutura comum
    ========================================================= */
 
 .stage {
@@ -506,7 +506,7 @@ kbd {
 .cell.is-new .mark { animation: pop .28s cubic-bezier(.2, 1.4, .5, 1); }
 .cell.is-new .mark__main { stroke-dasharray: 260; animation: draw .35s ease-out; }
 
-/* Vitória — destaque verde + estrela (não depende só da cor) */
+/* Vitória: destaque verde + estrela (não depende só da cor) */
 .cell.is-win { background-color: var(--win-bg); box-shadow: inset 0 0 0 4px var(--win); }
 .cell.is-win::after {
   content: "★";
@@ -530,7 +530,7 @@ kbd {
 .stage--mini[data-style="croche"] { --mark-w: 12; }
 
 /* =========================================================
-   ESTILOS — baseados na imagem "Tictactoe_style"
+   ESTILOS: baseados na imagem "Tictactoe_style"
    ========================================================= */
 
 /* 1) CROCHÊ ------------------------------------------------ */

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Homologação — Jogo da Velha (CT01–CT10)</title>
+  <title>Homologação: Jogo da Velha (CT01–CT10)</title>
   <style>
     body { font: 15px/1.5 system-ui, "Segoe UI", sans-serif; margin: 0; padding: 20px; background: #f6f3ee; color: #1c1b1a; }
     h1 { margin: 0 0 4px; font-size: 1.4rem; }
@@ -23,7 +23,7 @@
   </style>
 </head>
 <body>
-  <h1>Homologação automatizada — Casos de Teste</h1>
+  <h1>Homologação automatizada: Casos de Teste</h1>
   <p>Executa os roteiros CT01–CT10 (e verificações extras de RF/RN/RNF) na interface real, carregada no quadro abaixo. Abra esta página por um servidor local (<code>node tests/run-browser-tests.js --serve</code>).</p>
   <div class="summary" id="summary" role="status" aria-live="polite">Executando…</div>
   <div class="table-wrap">
@@ -62,7 +62,7 @@
     w = frame.contentWindow; d = w.document;
     await frameTick();
     assert(w.app, 'aplicação não inicializou (window.app ausente)');
-    w.app.aiDelay = 0;
+    w.app.cpuDelay = 0;
   }
 
   function start(cfg = {}) {
@@ -179,7 +179,7 @@
       d.getElementById('btn-new').click();
       click(0);
       const dlg = d.getElementById('confirm-dialog');
-      // 1º: cancelar — nada muda (RN07)
+      // 1º: cancelar, nada muda (RN07)
       d.getElementById('btn-reset').click(); await frameTick();
       assert(dlg.open, 'diálogo de confirmação não abriu');
       d.getElementById('confirm-cancel').click(); await sleep(20);
@@ -344,7 +344,7 @@
         const hit = txt.split('\n').find(l => remote.test(l));
         assert(!hit, `${f}: ${hit && hit.trim()}`);
       }
-      return `${files.length} arquivos analisados — nenhum recurso remoto`;
+      return `${files.length} arquivos analisados, nenhum recurso remoto`;
     });
   }
 

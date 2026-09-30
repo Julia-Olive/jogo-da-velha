@@ -1,73 +1,210 @@
 /**
- * MODEL — Estado e regras de negócio do Jogo da Velha.
+ * @file Camada MODEL do Jogo da Velha.
  *
- * Não conhece o DOM nem eventos. Toda a lógica de jogo (RN01–RN07),
- * placar (RF07) e inteligência do computador (níveis de dificuldade)
- * vive aqui, podendo ser testada isoladamente em Node ou no navegador.
+ * Guarda o estado da partida e aplica as regras de negócio (RN01 a RN07),
+ * o placar (RF07) e a estratégia do adversário computador.
+ * Não acessa o DOM: pode ser testada isoladamente no Node ou no navegador.
  */
 (function (global) {
   'use strict';
 
-  /** RN03 / RF05 — as 8 combinações vencedoras (3 linhas, 3 colunas, 2 diagonais). */
-  const WIN_LINES = Object.freeze([
-    [0, 1, 2], [3, 4, 5], [6, 7, 8], // linhas
-    [0, 3, 6], [1, 4, 7], [2, 5, 8], // colunas
-    [0, 4, 8], [2, 4, 6]             // diagonais
-  ]);
+  /* ======================================================================
+     Constantes do domínio
+     ====================================================================== */
 
+  /** Quantidade de casas do tabuleiro 3x3 (RF01). */
+  const BOARD_SIZE = 9;
+
+  /** Índice da casa central, a mais valiosa estrategicamente. */
+  const CENTER_CELL = 4;
+
+  /** Marcas dos jogadores. */
   const PLAYERS = Object.freeze({ X: 'X', O: 'O' });
 
-  /** Resultado de uma tentativa de jogada. */
+  /**
+   * As 8 combinações vencedoras: 3 linhas, 3 colunas e 2 diagonais (RN03, RF05).
+   * Os índices seguem a ordem de leitura: 0 é o canto superior esquerdo, 8 o inferior direito.
+   */
+  const WIN_LINES = Object.freeze([
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+    [0, 4, 8], [2, 4, 6]
+  ]);
+
+  /** Motivos pelos quais uma jogada pode ser recusada. */
   const MOVE_RESULT = Object.freeze({
-    OK: 'ok',
-    OCCUPIED: 'occupied',     // RF04 / RN02
-    GAME_OVER: 'game-over',   // RN04
-    OUT_OF_RANGE: 'out-of-range'
+    OCCUPIED: 'occupied',        // RF04, RN02: a casa já tem marca
+    GAME_OVER: 'game-over',      // RN04: a partida já terminou
+    OUT_OF_RANGE: 'out-of-range' // índice fora do tabuleiro
   });
 
-  /** Analisa um tabuleiro qualquer (função pura, reutilizada pela IA). */
+  /** Tipos de evento publicados pelo Model aos seus observadores. */
+  const MODEL_EVENTS = Object.freeze({
+    MOVE: 'move',
+    REJECTED: 'rejected',
+    UNDO: 'undo',
+    NEW_ROUND: 'new-round',
+    SCORE_RESET: 'score-reset'
+  });
+
+  /** Níveis de dificuldade do computador, com os textos exibidos ao jogador. */
+  const DIFFICULTIES = Object.freeze({
+    facil:      { label: 'Fácil',      description: 'Joga de forma aleatória. Ideal para aprender.' },
+    medio:      { label: 'Médio',      description: 'Vence quando pode e bloqueia suas trincas.' },
+    dificil:    { label: 'Difícil',    description: 'Estratégia ótima na maioria das jogadas, com deslizes raros.' },
+    impossivel: { label: 'Impossível', description: 'Estratégia perfeita (minimax). O melhor que você consegue é empatar.' }
+  });
+
+  /**
+   * @typedef {'X'|'O'|null} Cell  Conteúdo de uma casa.
+   *
+   * @typedef {Object} BoardEvaluation
+   * @property {'X'|'O'|null} winner  Jogador que fez trinca, se houver.
+   * @property {number[]|null} line   Índices da trinca vencedora.
+   * @property {boolean} draw         Tabuleiro cheio sem trinca (RN05).
+   *
+   * @typedef {Object} Score
+   * @property {number} X      Vitórias do jogador X.
+   * @property {number} O      Vitórias do jogador O.
+   * @property {number} draws  Empates.
+   *
+   * @typedef {Object} GameState  Cópia imutável do estado, entregue a quem observa o Model.
+   * @property {Cell[]} board
+   * @property {'X'|'O'} currentPlayer
+   * @property {'X'|'O'|null} winner
+   * @property {number[]|null} winningLine
+   * @property {boolean} isDraw
+   * @property {boolean} isOver
+   * @property {Score} score
+   * @property {number} moveCount
+   * @property {number|null} lastMove  Índice da última casa marcada.
+   */
+
+  /* ======================================================================
+     Funções puras sobre o tabuleiro
+     ====================================================================== */
+
+  /**
+   * Devolve o adversário de um jogador.
+   * @param {'X'|'O'} player
+   * @returns {'X'|'O'}
+   */
+  function opponentOf(player) {
+    return player === PLAYERS.X ? PLAYERS.O : PLAYERS.X;
+  }
+
+  /**
+   * Cria um tabuleiro vazio.
+   * @returns {Cell[]}
+   */
+  function createEmptyBoard() {
+    return Array(BOARD_SIZE).fill(null);
+  }
+
+  /**
+   * Lista os índices das casas vazias.
+   * @param {Cell[]} board
+   * @returns {number[]}
+   */
+  function emptyCells(board) {
+    const free = [];
+    for (let index = 0; index < board.length; index++) {
+      if (!board[index]) free.push(index);
+    }
+    return free;
+  }
+
+  /**
+   * Verifica se há trinca ou empate em um tabuleiro qualquer.
+   * @param {Cell[]} board
+   * @returns {BoardEvaluation}
+   */
   function evaluateBoard(board) {
     for (const line of WIN_LINES) {
-      const [a, b, c] = line;
-      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-        return { winner: board[a], line: line.slice(), draw: false };
+      const [first, second, third] = line;
+      const isTrinca = board[first] && board[first] === board[second] && board[first] === board[third];
+      if (isTrinca) {
+        return { winner: board[first], line: line.slice(), draw: false };
       }
     }
-    const full = board.every(Boolean);
-    return { winner: null, line: null, draw: full }; // RN05
+    return { winner: null, line: null, draw: board.every(Boolean) };
   }
 
-  function emptyCells(board) {
-    const cells = [];
-    board.forEach((v, i) => { if (!v) cells.push(i); });
-    return cells;
+  /**
+   * Procura a casa que completaria uma trinca do jogador informado.
+   * Serve tanto para vencer (própria marca) quanto para bloquear (marca do adversário).
+   * @param {Cell[]} board
+   * @param {'X'|'O'} player
+   * @returns {number} Índice da casa, ou -1 se não houver.
+   */
+  function findWinningCell(board, player) {
+    for (const line of WIN_LINES) {
+      const cells = line.map(index => board[index]);
+      const playerCount = cells.filter(cell => cell === player).length;
+      const emptyPosition = cells.indexOf(null);
+      if (playerCount === 2 && emptyPosition !== -1) {
+        return line[emptyPosition];
+      }
+    }
+    return -1;
   }
 
+  /* ======================================================================
+     GameModel: estado da partida e placar
+     ====================================================================== */
+
+  /**
+   * Estado de uma sessão de jogo: tabuleiro, turno, resultado e placar acumulado.
+   * Notifica os observadores a cada mudança (padrão Observer), para que o
+   * Controller atualize a interface sem que o Model conheça a View.
+   */
   class GameModel {
     constructor() {
+      /** @type {Score} */
       this.score = { X: 0, O: 0, draws: 0 };
+      /** @type {Set<Function>} */
       this.listeners = new Set();
-      this._resetBoard();
+      this.resetBoard();
     }
 
-    /* ---------- Observador (Model → Controller) ---------- */
-    subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
-    _emit(type, payload) {
-      const snapshot = this.getState();
-      this.listeners.forEach(fn => fn(type, snapshot, payload));
+    /**
+     * Registra um observador das mudanças de estado.
+     * @param {(event: string, state: GameState, details?: Object) => void} listener
+     * @returns {() => void} Função que cancela o registro.
+     */
+    subscribe(listener) {
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
     }
 
-    _resetBoard() {
-      this.board = Array(9).fill(null);
-      this.currentPlayer = PLAYERS.X; // RN01 — X sempre inicia
+    /**
+     * Avisa todos os observadores sobre um evento.
+     * @param {string} event
+     * @param {Object} [details]
+     */
+    notify(event, details) {
+      const state = this.getState();
+      this.listeners.forEach(listener => listener(event, state, details));
+    }
+
+    /** Limpa o tabuleiro e devolve a vez ao jogador X (RN01). O placar não muda. */
+    resetBoard() {
+      /** @type {Cell[]} */
+      this.board = createEmptyBoard();
+      this.currentPlayer = PLAYERS.X;
       this.winner = null;
       this.winningLine = null;
       this.isDraw = false;
-      this.history = []; // pilha de índices jogados (permite desfazer)
+      /** Índices jogados, em ordem. Permite desfazer jogadas. */
+      this.history = [];
     }
 
-    get isOver() { return Boolean(this.winner) || this.isDraw; }
+    /** @returns {boolean} Verdadeiro se houve vitória ou empate. */
+    get isOver() {
+      return Boolean(this.winner) || this.isDraw;
+    }
 
+    /** @returns {GameState} Cópia do estado atual. */
     getState() {
       return {
         board: this.board.slice(),
@@ -82,170 +219,282 @@
       };
     }
 
-    /** RF02 / RF03 / RF04 / RF05 / RN02 / RN04 */
+    /**
+     * Tenta marcar uma casa para o jogador da vez (RF02 a RF05, RN02 a RN05).
+     * @param {number} index Casa de 0 a 8.
+     * @returns {{ok: boolean, reason?: string, occupant?: string, player?: string}}
+     */
     play(index) {
-      if (!Number.isInteger(index) || index < 0 || index > 8) {
-        return { ok: false, reason: MOVE_RESULT.OUT_OF_RANGE };
-      }
-      if (this.isOver) {
-        this._emit('rejected', { index, reason: MOVE_RESULT.GAME_OVER });
-        return { ok: false, reason: MOVE_RESULT.GAME_OVER };
-      }
-      if (this.board[index]) {
-        // Turno NÃO é trocado (RF04)
-        this._emit('rejected', { index, reason: MOVE_RESULT.OCCUPIED, occupant: this.board[index] });
-        return { ok: false, reason: MOVE_RESULT.OCCUPIED, occupant: this.board[index] };
+      const rejection = this.validateMove(index);
+      if (rejection) {
+        if (rejection.reason !== MOVE_RESULT.OUT_OF_RANGE) {
+          this.notify(MODEL_EVENTS.REJECTED, { index, ...rejection });
+        }
+        return { ok: false, ...rejection };
       }
 
       const player = this.currentPlayer;
       this.board[index] = player;
       this.history.push(index);
+      this.applyResult(evaluateBoard(this.board));
 
-      const result = evaluateBoard(this.board);
-      if (result.winner) {
-        this.winner = result.winner;
-        this.winningLine = result.line;
-        this.score[result.winner] += 1; // RF07
-      } else if (result.draw) {
-        this.isDraw = true;
-        this.score.draws += 1; // RF07
-      } else {
-        this.currentPlayer = player === PLAYERS.X ? PLAYERS.O : PLAYERS.X; // RF03
-      }
-
-      this._emit('move', { index, player });
-      return { ok: true, player, winner: this.winner, draw: this.isDraw };
+      this.notify(MODEL_EVENTS.MOVE, { index, player });
+      return { ok: true, player };
     }
 
-    /** Desfaz a(s) última(s) jogada(s) de uma partida em andamento (controle do usuário). */
+    /**
+     * Confere se a jogada é permitida.
+     * @param {number} index
+     * @returns {{reason: string, occupant?: string}|null} Motivo da recusa, ou null se válida.
+     */
+    validateMove(index) {
+      const isValidIndex = Number.isInteger(index) && index >= 0 && index < BOARD_SIZE;
+      if (!isValidIndex) return { reason: MOVE_RESULT.OUT_OF_RANGE };
+      if (this.isOver) return { reason: MOVE_RESULT.GAME_OVER };
+      if (this.board[index]) return { reason: MOVE_RESULT.OCCUPIED, occupant: this.board[index] };
+      return null;
+    }
+
+    /**
+     * Encerra a partida (vitória ou empate) ou passa a vez ao adversário (RF03).
+     * @param {BoardEvaluation} evaluation
+     */
+    applyResult(evaluation) {
+      if (evaluation.winner) {
+        this.winner = evaluation.winner;
+        this.winningLine = evaluation.line;
+        this.score[evaluation.winner] += 1;
+      } else if (evaluation.draw) {
+        this.isDraw = true;
+        this.score.draws += 1;
+      } else {
+        this.currentPlayer = opponentOf(this.currentPlayer);
+      }
+    }
+
+    /**
+     * Desfaz as últimas jogadas de uma partida em andamento.
+     * Partidas encerradas não podem ser desfeitas, pois o placar já foi computado.
+     * @param {number} [steps=1] Quantidade de jogadas a desfazer.
+     * @returns {boolean} Verdadeiro se algo foi desfeito.
+     */
     undo(steps = 1) {
       if (this.isOver || this.history.length === 0) return false;
-      const n = Math.min(steps, this.history.length);
-      for (let i = 0; i < n; i++) {
-        const idx = this.history.pop();
-        this.board[idx] = null;
+
+      const count = Math.min(steps, this.history.length);
+      for (let i = 0; i < count; i++) {
+        this.board[this.history.pop()] = null;
       }
-      this.currentPlayer = this.history.length % 2 === 0 ? PLAYERS.X : PLAYERS.O;
-      this._emit('undo', { steps: n });
+      const xPlaysNext = this.history.length % 2 === 0;
+      this.currentPlayer = xPlaysNext ? PLAYERS.X : PLAYERS.O;
+
+      this.notify(MODEL_EVENTS.UNDO, { steps: count });
       return true;
     }
 
-    /** RF06 / RN01 / RN06 — limpa só o tabuleiro, preserva o placar. */
+    /** Começa uma nova rodada mantendo o placar (RF06, RN01, RN06). */
     newRound() {
-      this._resetBoard();
-      this._emit('new-round');
+      this.resetBoard();
+      this.notify(MODEL_EVENTS.NEW_ROUND);
     }
 
-    /** RF08 / RN07 — a confirmação é responsabilidade do Controller/View. */
+    /**
+     * Zera vitórias e empates e reinicia a rodada (RF08).
+     * A confirmação exigida pela RN07 é feita antes, pelo Controller.
+     */
     resetScore() {
       this.score = { X: 0, O: 0, draws: 0 };
-      this._resetBoard();
-      this._emit('score-reset');
+      this.resetBoard();
+      this.notify(MODEL_EVENTS.SCORE_RESET);
     }
   }
 
-  /* ================== Inteligência do computador ================== */
+  /* ======================================================================
+     Adversário computador
+     ====================================================================== */
 
-  /* Minimax com memoização: o tabuleiro tem poucos milhares de estados,
-     então cada posição é calculada uma única vez (RNF03 — resposta imediata).
-     A pontuação usa o nº de casas preenchidas para preferir vitórias rápidas. */
-  const memo = new Map();
+  /** Pontuação de uma vitória no minimax, descontada pelas casas já usadas. */
+  const WIN_SCORE = 10;
 
-  function minimax(board, turn, ai) {
-    const key = board.map(v => v || '-').join('') + turn + ai;
-    if (memo.has(key)) return memo.get(key);
+  /** Probabilidade de o nível Médio preferir o centro quando ele está livre. */
+  const MEDIUM_CENTER_CHANCE = 0.5;
 
-    const r = evaluateBoard(board);
-    const filled = 9 - emptyCells(board).length;
-    let best;
-    if (r.winner === ai) best = 10 - filled;
-    else if (r.winner) best = filled - 10;
-    else if (r.draw) best = 0;
-    else {
-      best = turn === ai ? -Infinity : Infinity;
-      for (const i of emptyCells(board)) {
-        board[i] = turn;
-        const s = minimax(board, turn === 'X' ? 'O' : 'X', ai);
-        board[i] = null;
-        best = turn === ai ? Math.max(best, s) : Math.min(best, s);
+  /** Probabilidade de o nível Difícil fazer uma jogada aleatória. */
+  const HARD_MISTAKE_CHANCE = 0.2;
+
+  /** Resultados do minimax já calculados, indexados pela posição. */
+  const minimaxCache = new Map();
+
+  /** Código numérico de cada conteúdo de casa, usado na chave do cache. */
+  const CELL_CODES = Object.freeze({ X: 1, O: 2 });
+
+  /**
+   * Converte a posição em um número único (tabuleiro em base 3 + vez + marca do computador).
+   * Chaves numéricas evitam criar textos a cada posição analisada (RNF03).
+   * @param {Cell[]} board
+   * @param {'X'|'O'} turn
+   * @param {'X'|'O'} cpu
+   * @returns {number}
+   */
+  function positionKey(board, turn, cpu) {
+    let key = 0;
+    for (let index = 0; index < BOARD_SIZE; index++) {
+      key = key * 3 + (CELL_CODES[board[index]] || 0);
+    }
+    return key * 4 + (turn === PLAYERS.X ? 0 : 2) + (cpu === PLAYERS.X ? 0 : 1);
+  }
+
+  /**
+   * Versão enxuta de evaluateBoard para o minimax: devolve só o vencedor, sem criar objetos.
+   * @param {Cell[]} board
+   * @returns {'X'|'O'|null}
+   */
+  function winnerOf(board) {
+    for (const [first, second, third] of WIN_LINES) {
+      if (board[first] && board[first] === board[second] && board[first] === board[third]) {
+        return board[first];
       }
     }
-    memo.set(key, best);
-    return best;
+    return null;
   }
 
-  function bestMoves(board, ai) {
-    let best = -Infinity;
+  /**
+   * Avalia uma posição com o algoritmo minimax.
+   * O resultado é memorizado: o jogo da velha tem poucos milhares de posições,
+   * então cada uma é calculada só uma vez (RNF03).
+   * Vitórias mais rápidas valem mais; derrotas mais tardias valem menos.
+   * @param {Cell[]} board   Tabuleiro (é alterado e restaurado durante a busca).
+   * @param {'X'|'O'} turn   Quem joga nesta posição.
+   * @param {'X'|'O'} cpu    Marca do computador.
+   * @returns {number} Pontuação do ponto de vista do computador.
+   */
+  function minimax(board, turn, cpu) {
+    const cacheKey = positionKey(board, turn, cpu);
+    const cached = minimaxCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const winner = winnerOf(board);
+    const freeCells = emptyCells(board);
+    const filledCells = BOARD_SIZE - freeCells.length;
+    let score;
+
+    if (winner === cpu) score = WIN_SCORE - filledCells;
+    else if (winner) score = filledCells - WIN_SCORE;
+    else if (freeCells.length === 0) score = 0;
+    else {
+      const isCpuTurn = turn === cpu;
+      score = isCpuTurn ? -Infinity : Infinity;
+      for (const index of freeCells) {
+        board[index] = turn;
+        const childScore = minimax(board, opponentOf(turn), cpu);
+        board[index] = null;
+        score = isCpuTurn ? Math.max(score, childScore) : Math.min(score, childScore);
+      }
+    }
+
+    minimaxCache.set(cacheKey, score);
+    return score;
+  }
+
+  /**
+   * Lista todas as jogadas de melhor pontuação para o computador.
+   * @param {Cell[]} board
+   * @param {'X'|'O'} cpu
+   * @returns {number[]}
+   */
+  function bestMoves(board, cpu) {
+    let bestScore = -Infinity;
     let moves = [];
-    for (const i of emptyCells(board)) {
-      board[i] = ai;
-      const s = minimax(board, ai === 'X' ? 'O' : 'X', ai);
-      board[i] = null;
-      if (s > best) { best = s; moves = [i]; } else if (s === best) moves.push(i);
+    for (const index of emptyCells(board)) {
+      board[index] = cpu;
+      const score = minimax(board, opponentOf(cpu), cpu);
+      board[index] = null;
+      if (score > bestScore) {
+        bestScore = score;
+        moves = [index];
+      } else if (score === bestScore) {
+        moves.push(index);
+      }
     }
     return moves;
   }
 
-  function findLineCompletion(board, player) {
-    for (const [a, b, c] of WIN_LINES) {
-      const cells = [board[a], board[b], board[c]];
-      if (cells.filter(v => v === player).length === 2 && cells.includes(null)) {
-        return [a, b, c][cells.indexOf(null)];
-      }
-    }
-    return -1;
+  /**
+   * Sorteia um item de uma lista.
+   * @template T
+   * @param {T[]} items
+   * @param {() => number} random Gerador entre 0 e 1.
+   * @returns {T}
+   */
+  function pickRandom(items, random) {
+    return items[Math.floor(random() * items.length)];
   }
 
-  const pick = (arr, rnd) => arr[Math.floor(rnd() * arr.length)];
+  /**
+   * Devolve a casa que vence ou, se não houver, a que bloqueia o adversário.
+   * @param {Cell[]} board
+   * @param {'X'|'O'} cpu
+   * @returns {number} Índice da casa, ou -1.
+   */
+  function findWinOrBlock(board, cpu) {
+    const winningCell = findWinningCell(board, cpu);
+    return winningCell !== -1 ? winningCell : findWinningCell(board, opponentOf(cpu));
+  }
 
-  const DIFFICULTIES = Object.freeze({
-    facil:      { label: 'Fácil',      description: 'Joga de forma aleatória. Ideal para aprender.' },
-    medio:      { label: 'Médio',      description: 'Vence quando pode e bloqueia suas trincas.' },
-    dificil:    { label: 'Difícil',    description: 'Estratégia ótima na maioria das jogadas, com deslizes raros.' },
-    impossivel: { label: 'Impossível', description: 'Estratégia perfeita (minimax). O melhor que você consegue é empatar.' }
+  /**
+   * Estratégia de cada nível de dificuldade.
+   * Todas recebem (tabuleiro, marca do computador, gerador aleatório) e devolvem uma casa vazia.
+   */
+  const STRATEGIES = Object.freeze({
+    facil(board, cpu, random) {
+      return pickRandom(emptyCells(board), random);
+    },
+
+    medio(board, cpu, random) {
+      const tacticalCell = findWinOrBlock(board, cpu);
+      if (tacticalCell !== -1) return tacticalCell;
+      if (!board[CENTER_CELL] && random() < MEDIUM_CENTER_CHANCE) return CENTER_CELL;
+      return pickRandom(emptyCells(board), random);
+    },
+
+    dificil(board, cpu, random) {
+      const tacticalCell = findWinOrBlock(board, cpu);
+      if (tacticalCell !== -1) return tacticalCell;
+      if (random() < HARD_MISTAKE_CHANCE) return pickRandom(emptyCells(board), random);
+      return pickRandom(bestMoves(board, cpu), random);
+    },
+
+    impossivel(board, cpu, random) {
+      return pickRandom(bestMoves(board, cpu), random);
+    }
   });
 
-  const AIPlayer = {
+  /** Adversário computador. */
+  const CpuPlayer = Object.freeze({
     /**
-     * Escolhe uma casa para o computador.
-     * @param {Array} board   tabuleiro atual (não é modificado)
-     * @param {string} ai     marca do computador ('X' ou 'O')
-     * @param {string} level  facil | medio | dificil | impossivel
-     * @param {Function} rnd  gerador aleatório (injetável para testes)
+     * Escolhe a casa que o computador vai marcar.
+     * @param {Cell[]} board          Tabuleiro atual (não é alterado).
+     * @param {'X'|'O'} cpu           Marca do computador.
+     * @param {string} level          Chave de DIFFICULTIES.
+     * @param {() => number} [random] Gerador aleatório, substituível nos testes.
+     * @returns {number} Índice da casa, ou -1 se o tabuleiro estiver cheio.
      */
-    chooseMove(board, ai, level, rnd = Math.random) {
-      const b = board.slice();
-      const free = emptyCells(b);
-      if (free.length === 0) return -1;
-      const human = ai === 'X' ? 'O' : 'X';
-
-      switch (level) {
-        case 'facil':
-          return pick(free, rnd);
-        case 'medio': {
-          const win = findLineCompletion(b, ai);
-          if (win >= 0) return win;
-          const block = findLineCompletion(b, human);
-          if (block >= 0) return block;
-          if (!b[4] && rnd() < 0.5) return 4;
-          return pick(free, rnd);
-        }
-        case 'dificil': {
-          const win = findLineCompletion(b, ai);
-          if (win >= 0) return win;
-          const block = findLineCompletion(b, human);
-          if (block >= 0) return block;
-          if (rnd() < 0.2) return pick(free, rnd); // deslize ocasional
-          return pick(bestMoves(b, ai), rnd);
-        }
-        case 'impossivel':
-        default:
-          return pick(bestMoves(b, ai), rnd);
-      }
+    chooseMove(board, cpu, level, random = Math.random) {
+      const boardCopy = board.slice();
+      if (emptyCells(boardCopy).length === 0) return -1;
+      const strategy = STRATEGIES[level] || STRATEGIES.impossivel;
+      return strategy(boardCopy, cpu, random);
     }
-  };
+  });
 
-  const api = { GameModel, AIPlayer, WIN_LINES, PLAYERS, MOVE_RESULT, DIFFICULTIES, evaluateBoard };
-  if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  else Object.assign(global, api);
+  /* ======================================================================
+     Exportação (navegador e Node)
+     ====================================================================== */
+
+  const publicApi = {
+    GameModel, CpuPlayer, WIN_LINES, PLAYERS, MOVE_RESULT, MODEL_EVENTS, DIFFICULTIES,
+    evaluateBoard, opponentOf
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = publicApi;
+  else Object.assign(global, publicApi);
 })(typeof window !== 'undefined' ? window : globalThis);

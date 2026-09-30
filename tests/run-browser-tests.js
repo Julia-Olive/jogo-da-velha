@@ -1,5 +1,5 @@
 /**
- * Executor de testes de interface (sem dependências — Node 22+).
+ * Executor de testes de interface (sem dependências, requer Node 22+).
  *
  *   node tests/run-browser-tests.js            → roda CT01–CT10 + extras no Chrome/Edge headless
  *   node tests/run-browser-tests.js --serve    → só sobe o servidor para abrir tests/testes.html manualmente
